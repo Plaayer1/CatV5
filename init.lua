@@ -1,111 +1,66 @@
-\-- Simple CatV5 loader with offline whitelist embedded
--- Goal:
--- 1) Force an offline "guest-only" whitelist (no network, no ranks)
--- 2) Ensure BedWars game script loads by providing a local game file
--- 3) Keep it simple and robust (no GitHub API calls)
+-- Simple CatV5 loader with in-memory OFFLINE whitelist (guest-only)
+-- Keeps developer mode OFF to avoid crashes and let BedWars load automatically.
+-- Does NOT write whitelist.lua to disk (to avoid overwrite/race issues). Instead, it injects a stub in memory.
 
 repeat task.wait() until game:IsLoaded()
 
--- Simple safe I/O helpers
-local function safe(p, f, ...)
-    local ok, res = pcall(f, ...)
-    return ok, res
-end
+-- Ensure non-dev path so main.lua auto-downloads the game script for the current PlaceId
+shared.VapeDeveloper = false
+getgenv().catvapedev = false
+
+-- Minimal helpers
 local function ensure_folder(path)
-    safe(path, function()
-        if not isfolder(path) then makefolder(path) end
-    end)
+    pcall(function() if not isfolder(path) then makefolder(path) end end)
 end
 local function write_safe(path, data)
-    safe(path, function() writefile(path, data) end)
-end
-local function read_safe(path, default)
-    local ok, res = safe(path, function() return readfile(path) end)
-    return ok and res or default
-end
-local function file_exists(path)
-    local ok, res = safe(path, function() return readfile(path) end)
-    return ok and res ~= nil and res ~= ""
+    pcall(function() writefile(path, data) end)
 end
 
--- Folders needed by main.lua
+-- Seed required folders/files for main.lua
 ensure_folder("catrewrite")
 ensure_folder("catrewrite/profiles")
-ensure_folder("catrewrite/games")
-ensure_folder("catrewrite/libraries")
-
--- Seed commit to main so main.lua downloader works if needed
 write_safe("catrewrite/profiles/commit.txt", "main")
 write_safe("catreset", "True")
 
--- OFFLINE whitelist: everyone is "guest" (no network) and no ranks
-do
-    local stub = [[
--- OFFLINE whitelist: everyone is "guest" (no network)
-local Players = game:GetService("Players")
-local lp = Players.LocalPlayer
-getgenv().catuser = getgenv().catuser or (lp and lp.Name) or "Guest"
-shared.CatRank = "guest"
+-- OFFLINE whitelist (guest-only) injected in-memory (no file writes)
+local function apply_offline_whitelist()
+    local Players = game:GetService("Players")
+    local lp = Players.LocalPlayer
+    getgenv().catuser = getgenv().catuser or (lp and lp.Name) or "Guest"
+    shared.CatRank = "guest"
 
-local W = {
-    customtags = {},
-    data = {
-        WhitelistedUsers = {},
-        BlacklistedUsers = {},
-        Announcement = {expiretime = 0, targets = "all", text = ""}
-    },
-    localprio = 0,
-    said = {}
-}
+    local W = {}
 
--- Match the basic interface universal.lua expects
-function W:get(_) return 0, true, nil end       -- level 0, attackable true, no tags
-function W:isingame() return false end
-function W:tag(_, text, rich) return text and "" or {} end
-function W:update() return true end
-W.commands = {}
+    -- Core API used by scripts in this repo
+    function W.GetRank(_) return "guest" end
+    function W.IsWhitelisted(_) return false end
+    function W.GetUserData(uid) return { rank = "guest", name = tostring(uid) } end
 
--- Publish everywhere
-shared.CatWhitelist = W
-_G.whitelist = W
-whitelist = W
+    -- Extra compatibility no-ops (harmless if unused)
+    function W.get(_) return 0, true, nil end
+    function W.isingame() return false end
+    function W.tag(_, text) return text and "" or {} end
+    function W.update() return true end
+    W.commands = {}
 
--- If vape is already around, wire it in
-local vape = rawget(shared, "vape")
-if vape and vape.Libraries then
-    vape.Libraries.whitelist = W
-end
+    -- Publish globally
+    shared.CatWhitelist = W
+    _G.whitelist = W
+    whitelist = W
 
-return W
-]]
-    ensure_folder("catrewrite/libraries")
-    write_safe("catrewrite/libraries/whitelist.lua", stub)
-end
-
--- Provide a local BedWars game file so main.lua loads it in developer mode
-do
-    local placeId = tostring(game.PlaceId)
-    local localGamePath = "catrewrite/games/"..placeId..".lua"
-    if not file_exists(localGamePath) then
-        local url = "https://raw.githubusercontent.com/Plaayer1/CatV5/main/games/"..placeId..".lua"
-        local ok, src = pcall(function() return game:HttpGet(url, true) end)
-        if ok and src and src ~= "" and src ~= "404: Not Found" then
-            if localGamePath:find("%.lua$") then
-                src = "--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n"..src
-            end
-            write_safe(localGamePath, src)
-        end
-        -- If this placeId is not BedWars (no file on repo), it's fine; universal will still load.
+    -- If Vape libs exist after main loads, wire them too
+    local vape = rawget(shared, "vape")
+    if vape and vape.Libraries then
+        vape.Libraries.whitelist = W
     end
+
+    return W
 end
 
--- IMPORTANT:
--- Turn ON developer mode so main.lua prefers local files.
--- This guarantees our offline whitelist (written above) is used and the local game file gets loaded.
-shared.VapeDeveloper = true
-getgenv().catvapedev = true
+-- Apply once before main (in case anything checks it early)
+apply_offline_whitelist()
 
--- Fetch and run main.lua (from your repo main branch)
+-- Fetch and run main.lua directly (stable path)
 local ok, src = pcall(function()
     return game:HttpGet("https://raw.githubusercontent.com/Plaayer1/CatV5/main/main.lua", true)
 end)
@@ -113,9 +68,30 @@ if not ok or not src or src == "" then
     error("CatV5 init: Failed to fetch main.lua")
 end
 
-local chunk, err = loadstring(src, "main")
-if not chunk then
+local f, err = loadstring(src, "main")
+if not f then
     error("CatV5 init: loadstring error: "..tostring(err))
 end
 
-return chunk(...)
+-- Run main.lua
+local ret
+local ran, runErr = pcall(function()
+    ret = f(...)
+end)
+
+-- Re-apply after main (in case main replaced it)
+apply_offline_whitelist()
+
+-- Keep it enforced briefly to win any late init races
+task.spawn(function()
+    for _ = 1, 20 do -- ~10 seconds total
+        apply_offline_whitelist()
+        task.wait(0.5)
+    end
+end)
+
+if not ran then
+    error("CatV5 init: main.lua runtime error: "..tostring(runErr))
+end
+
+return ret
