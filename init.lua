@@ -9,6 +9,8 @@ end
 local cloneref = cloneref or function(ref) return ref end
 local gethui = gethui or function() return game:GetService('Players').LocalPlayer.PlayerGui end
 
+warn(closet)
+
 local downloader = Instance.new('TextLabel', Instance.new('ScreenGui', gethui()))
 downloader.Size = UDim2.new(1, 0, -0.08, 0)
 downloader.BackgroundTransparency = 1
@@ -48,7 +50,8 @@ end
 local function downloadFile(path, func)
 	if not isfile(path) then
 		local suc, res = pcall(function()
-			local subbed = path:gsub('catrewrite/', ''):gsub(' ', '%%20')
+			local subbed = path:gsub('catrewrite/', '')
+			subbed = subbed:gsub(' ', '%%20')
 			return game:HttpGet('https://raw.githubusercontent.com/Plaayer1/CatV5/'..readfile('catrewrite/profiles/commit.txt')..'/'..subbed, true)
 		end)
 		if not suc or res == '404: Not Found' then
@@ -107,9 +110,11 @@ if closet then
 			for _, v in getconnections(game:GetService('LogService').MessageOut) do
 				v:Disable()
 			end
-			for _, v in getconnections(game:GetService('ScriptContext').Error') do
+
+			for _, v in getconnections(game:GetService('ScriptContext').Error) do
 				v:Disable()
 			end
+
 			task.wait(0.5)
 		until not shared.VapeDeveloper or not getgenv().closet
 	end)
