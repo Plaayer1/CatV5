@@ -11,14 +11,30 @@ if license.User then
 end
 
 local cloneref = cloneref or function(ref) return ref end
-local gethui = gethui or function() return game:GetService('Players').LocalPlayer.PlayerGui end
+local CoreGui = cloneref(game:GetService('CoreGui'))
+local Players = cloneref(game:GetService('Players'))
+local function safe_gethui()
+    local ok, res = pcall(function()
+        return (gethui and gethui()) or Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass('PlayerGui') or CoreGui
+    end)
+    return ok and res or CoreGui
+end
 
-local downloader = Instance.new('TextLabel', Instance.new('ScreenGui', gethui()))
-downloader.Size = UDim2.new(1, 0, -0.08, 0)
+-- Minimal, non-crashy overlay
+local overlayParent = safe_gethui()
+local gui = Instance.new('ScreenGui')
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Name = 'cat_init_overlay'
+gui.Parent = overlayParent
+
+local downloader = Instance.new('TextLabel', gui)
+downloader.Size = UDim2.new(1, 0, 0, 18)
+downloader.Position = UDim2.new(0, 0, 0, 0)
 downloader.BackgroundTransparency = 1
 downloader.TextStrokeTransparency = 0
-downloader.TextSize = (not closet and 20) or 0
-downloader.Text = 'Downloading Nothing.'
+downloader.TextSize = (not closet and 18) or 1
+downloader.Text = 'Initializing...'
 downloader.TextColor3 = Color3.new(1, 1, 1)
 downloader.Font = Enum.Font.Arial
 
@@ -31,103 +47,145 @@ local GITHUB_REPO = "CatV5"
 local function gh(url)
     return "https://api.github.com/repos/"..GITHUB_OWNER.."/"..GITHUB_REPO..url
 end
-local function raw(path)
-    return "https://raw.githubusercontent.com/"..GITHUB_OWNER.."/"..GITHUB_REPO.."/"..readfile("catrewrite/profiles/commit.txt").."/"..path
+
+local function isfile_safe(path)
+    local ok, res = pcall(function() return readfile(path) end)
+    return ok and res ~= nil and res ~= ''
 end
 
-local success, commitdata = pcall(function()
-    local commitinfo = httpService:JSONDecode(game:HttpGet(gh("/commits")))[1]
-    if commitinfo and type(commitinfo) == "table" then
-        local fullinfo = httpService:JSONDecode(game:HttpGet(gh("/commits/".. commitinfo.sha)))
-        fullinfo.hash = commitinfo.sha:sub(1, 7)
-        return fullinfo
+local function readfile_safe(path, default)
+    local ok, res = pcall(function() return readfile(path) end)
+    return ok and res or default
+end
+
+local function writefile_safe(path, contents)
+    pcall(function() writefile(path, contents) end)
+end
+
+local function makefolder_safe(path)
+    pcall(function() if not isfolder(path) then makefolder(path) end end)
+end
+
+local function get_commit_txt()
+    if isfile_safe('catrewrite/profiles/commit.txt') then
+        return readfile_safe('catrewrite/profiles/commit.txt', 'main')
     end
-end)
-
-if not success or typeof(commitdata) ~= 'table' or commitdata.sha == nil then
-	commitdata = {sha = 'main', files = {}}
+    return 'main'
 end
 
-writefile('catreset', 'True')
-
-local isfile = isfile or function(file)
-	local suc, res = pcall(function()
-		return readfile(file)
-	end)
-	return suc and res ~= nil and res ~= ''
-end
-local delfile = delfile or function(file)
-	writefile(file, '')
+local function set_commit_txt(sha)
+    makefolder_safe('catrewrite/profiles')
+    writefile_safe('catrewrite/profiles/commit.txt', sha)
 end
 
-local function downloadFile(path, func)
-	if not isfile(path) then
-		local suc, res = pcall(function()
-			local subbed = path:gsub('catrewrite/', ''):gsub(' ', '%%20')
-			return game:HttpGet(raw(subbed), true)
-		end)
-		if not suc or res == '404: Not Found' then
-			error(res)
-		end
-		if path:find('%.lua$') then
-			res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
-		end
-		writefile(path, res)
-	end
-	return (func or readfile)(path)
+local function raw(path)
+    local commit = get_commit_txt()
+    return "https://raw.githubusercontent.com/"..GITHUB_OWNER.."/"..GITHUB_REPO.."/"..commit.."/"..path
+end
+
+local function httpget(url)
+    local ok, res = pcall(function() return game:HttpGet(url, true) end)
+    if not ok then return nil end
+    if res == '404: Not Found' then return nil end
+    return res
+end
+
+local function gh_json(url)
+    local txt = httpget(url)
+    if not txt then return nil end
+    local ok, obj = pcall(function() return httpService:JSONDecode(txt) end)
+    return ok and obj or nil
+end
+
+-- Discover latest commit, but be resilient to API/rate-limit failures
+downloader.Text = 'Checking updates...'
+local commitdata = gh_json(gh("/commits"))
+local sha = 'main'
+if commitdata and commitdata[1] and commitdata[1].sha then
+    sha = commitdata[1].sha
+else
+    -- fallback to existing or main
+    sha = get_commit_txt()
+end
+set_commit_txt(sha)
+
+writefile_safe('catreset', 'True')
+
+local function downloadFile(path, reader)
+    if not isfile_safe(path) then
+        local remotePath = path:gsub('^catrewrite/', '')
+        remotePath = remotePath:gsub(' ', '%%20')
+        local url = raw(remotePath)
+        local res = httpget(url)
+        if not res then
+            -- keep going without crashing
+            return nil
+        end
+        if path:find('%.lua$') then
+            res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
+        end
+        writefile_safe(path, res)
+    end
+    return (reader or readfile_safe)(path)
 end
 
 local function wipeFolder(path)
-	if not isfolder(path) then return end
-	for _, file in listfiles(path) do
-		if file:find('loader') then continue end
-		if isfile(file) and select(1, readfile(file):find('--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.')) == 1 then
-			delfile(file)
-		end
-	end
-end 
-
--- Ensure base folders exist
-for _, folder in {
-	'catrewrite',
-	'catrewrite/communication',
-	'catrewrite/games',
-	'catrewrite/games/bedwars',
-	'catrewrite/profiles',
-	'catrewrite/assets',
-	'catrewrite/libraries',
-	'catrewrite/libraries/Enviroments',
-	'catrewrite/guis'
-} do
-	if not isfolder(folder) then
-		makefolder(folder)
-	end
-end
-
--- Seed commit and pull profiles/translations from your fork on first run
-if not isfolder('catrewrite') or #listfiles('catrewrite') <= 6 or not isfolder('catrewrite/profiles') or not isfile('catrewrite/profiles/commit.txt') then
-    makefolder('catrewrite/profiles')
-    writefile('catrewrite/profiles/commit.txt', commitdata.sha)
-    local req = httpService:JSONDecode(game:HttpGet(gh('/contents/profiles')))
-    for _, v in req do
-        if v.path ~= 'profiles/commit.txt' then
-			downloader.Text = `Downloading catrewrite/{v.path}`
-            downloadFile(`catrewrite/{v.path}`)
+    if not isfolder(path) then return end
+    local ok, files = pcall(function() return listfiles(path) end)
+    if not ok or not files then return end
+    for _, file in ipairs(files) do
+        if tostring(file):find('loader') then
+            -- keep loader files
+        else
+            local okRead, contents = pcall(function() return readfile(file) end)
+            if okRead and contents and contents:sub(1, 99):find('This watermark is used to delete the file') then
+                writefile_safe(file, '')
+            end
         end
     end
-    task.spawn(function()
-        local treq = httpService:JSONDecode(game:HttpGet(gh('/contents/translations')))
-        for _, v in treq do
-            downloadFile(`catrewrite/{v.path}`)
+end
+
+-- Ensure base folders exist
+for _, folder in ipairs({
+    'catrewrite',
+    'catrewrite/communication',
+    'catrewrite/games',
+    'catrewrite/games/bedwars',
+    'catrewrite/profiles',
+    'catrewrite/assets',
+    'catrewrite/libraries',
+    'catrewrite/libraries/Enviroments',
+    'catrewrite/guis'
+}) do
+    makefolder_safe(folder)
+end
+
+-- First-run profile/translations fetch (safe)
+do
+    local needsSeed = (not isfile_safe('catrewrite/profiles/commit.txt'))
+    if needsSeed then
+        set_commit_txt(sha)
+        local profiles = gh_json(gh('/contents/profiles')) or {}
+        for _, v in ipairs(profiles) do
+            if v.path ~= 'profiles/commit.txt' then
+                downloader.Text = 'Downloading catrewrite/'..tostring(v.path)
+                downloadFile('catrewrite/'..tostring(v.path))
+            end
         end
-    end)
+        task.spawn(function()
+            local translations = gh_json(gh('/contents/translations')) or {}
+            for _, v in ipairs(translations) do
+                downloadFile('catrewrite/'..tostring(v.path))
+            end
+        end)
+    end
 end
 
 -- Offline whitelist stub (guest-only) injected before main.lua loads.
 -- Because developer mode is true, main.lua will prefer this local file and won't overwrite it.
 do
-	local whitelistPath = "catrewrite/libraries/whitelist.lua"
-	local stub = [[
+    local whitelistPath = "catrewrite/libraries/whitelist.lua"
+    local stub = [[
 -- Offline whitelist (no network, no Discord/API).
 -- Everyone is treated as "guest" and not whitelisted.
 local Players = game:GetService("Players")
@@ -143,8 +201,7 @@ _G.whitelist = M
 whitelist = M
 return M
 ]]
-	-- Always enforce the stub to keep things offline/guest
-	writefile(whitelistPath, stub)
+    writefile_safe(whitelistPath, stub)
 end
 
 shared.VapeDeveloper = developer
@@ -153,78 +210,88 @@ getgenv().catvapedev = developer
 getgenv().closet = closet
 
 if closet then
-	task.spawn(function()
-		repeat
-			for _, v in getconnections(game:GetService('LogService').MessageOut) do
-				v:Disable()
-			end
-			for _, v in getconnections(game:GetService('ScriptContext').Error) do
-				v:Disable()
-			end
-			task.wait(0.5)
-		until not shared.VapeDeveloper or not getgenv().closet
-	end)
+    task.spawn(function()
+        repeat
+            for _, v in getconnections(game:GetService('LogService').MessageOut) do pcall(function() v:Disable() end) end
+            for _, v in getconnections(game:GetService('ScriptContext').Error) do pcall(function() v:Disable() end) end
+            task.wait(0.5)
+        until not shared.VapeDeveloper or not getgenv().closet
+    end)
 end
 
-downloader.Text = 'Loading Cat Rewrite'
+downloader.Text = 'Preparing assets...'
 
 -- With developer mode enabled, local files are preserved; no wipe on version changes.
 if not shared.VapeDeveloper then
-	local commit = commitdata.sha or 'main'
-	if commit == 'main' or (isfile('catrewrite/profiles/commit.txt') and readfile('catrewrite/profiles/commit.txt') or '') ~= commit then
-		wipeFolder('catrewrite')
-		wipeFolder('catrewrite/games')
-		wipeFolder('catrewrite/guis')
-		wipeFolder('catrewrite/libraries')
-	end
-    writefile('catrewrite/cheaters.json', '{}')
-	writefile('catrewrite/profiles/commit.txt', commit)
+    local commit = sha or 'main'
+    if commit == 'main' or readfile_safe('catrewrite/profiles/commit.txt', '') ~= commit then
+        wipeFolder('catrewrite')
+        wipeFolder('catrewrite/games')
+        wipeFolder('catrewrite/guis')
+        wipeFolder('catrewrite/libraries')
+    end
+    writefile_safe('catrewrite/cheaters.json', '{}')
+    set_commit_txt(commit)
 end
 
 -- Ensure the current game's script exists locally so main.lua will load it in developer mode.
 do
-	local function ensureGameFile(placeId)
-		local path = 'catrewrite/games/'..placeId..'.lua'
-		if not isfile(path) then
-			local ok, res = pcall(function()
-				return game:HttpGet(raw('games/'..placeId..'.lua'), true)
-			end)
-			if ok and res and res ~= '404: Not Found' then
-				if path:find('%.lua$') then
-					res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
-				end
-				writefile(path, res)
-			end
-		end
-	end
+    local function ensureGameFile(placeId)
+        local path = 'catrewrite/games/'..placeId..'.lua'
+        if not isfile_safe(path) then
+            local res = httpget(raw('games/'..placeId..'.lua'))
+            if res then
+                res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
+                writefile_safe(path, res)
+            end
+        end
+    end
 
-	-- Always fetch the active PlaceId
-	ensureGameFile(tostring(game.PlaceId))
+    -- Always fetch the active PlaceId first
+    ensureGameFile(tostring(game.PlaceId))
 
-	-- Known BedWars place ids (lobby/variants) as fallbacks
-	for _, pid in {
-		'6872274481', -- BedWars match
-		'6872265039', -- BedWars lobby
-		'8444591321',
-		'8542275097',
-		'8560631822',
-		'11156779721',
-		'11630038968',
-		'12011959048',
-		'13246639586',
-		'14191889582',
-		'14662411059',
-		'17750024818',
-		'79695841807485',
-		'95004353881831'
-	} do
-		if tostring(game.PlaceId) ~= pid then
-			ensureGameFile(pid)
-		end
-	end
+    -- Known BedWars place ids (lobby/variants) as fallbacks
+    for _, pid in ipairs({
+        '6872274481', -- BedWars match
+        '6872265039', -- BedWars lobby
+        '8444591321',
+        '8542275097',
+        '8560631822',
+        '11156779721',
+        '11630038968',
+        '12011959048',
+        '13246639586',
+        '14191889582',
+        '14662411059',
+        '17750024818',
+        '79695841807485',
+        '95004353881831'
+    }) do
+        if tostring(game.PlaceId) ~= pid then
+            ensureGameFile(pid)
+        end
+    end
 end
 
--- Load main
-loadstring(downloadFile('catrewrite/main.lua'), 'main')()
+downloader.Text = 'Loading Cat Rewrite...'
 
-downloader:Destroy()
+-- Load main
+local mainLoaded = downloadFile('catrewrite/main.lua', function(p)
+    return readfile_safe(p)
+end)
+if mainLoaded and mainLoaded ~= '' then
+    local ok, err = pcall(function()
+        loadstring(mainLoaded, 'main')()
+    end)
+    if not ok then
+        downloader.Text = 'Main load error: '..tostring(err)
+    end
+else
+    downloader.Text = 'Failed to load main.lua'
+end
+
+task.delay(2, function()
+    if gui and gui.Parent then
+        gui:Destroy()
+    end
+end)
