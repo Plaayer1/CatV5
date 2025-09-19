@@ -1,14 +1,9 @@
--- Simple CatV5 loader with in-memory OFFLINE whitelist (guest-only)
--- Keeps developer mode OFF to avoid crashes and let BedWars load automatically.
--- Does NOT write whitelist.lua to disk (to avoid overwrite/race issues). Instead, it injects a stub in memory.
+-- Simple CatV5 loader with offline-safe whitelist override
+-- Keeps developer mode OFF; avoids network/whitelist crashes.
 
 repeat task.wait() until game:IsLoaded()
 
--- Ensure non-dev path so main.lua auto-downloads the game script for the current PlaceId
-shared.VapeDeveloper = false
-getgenv().catvapedev = false
-
--- Minimal helpers
+-- Tiny helpers
 local function ensure_folder(path)
     pcall(function() if not isfolder(path) then makefolder(path) end end)
 end
@@ -16,51 +11,64 @@ local function write_safe(path, data)
     pcall(function() writefile(path, data) end)
 end
 
--- Seed required folders/files for main.lua
+-- Non-dev path so main.lua auto-downloads the game script for the current PlaceId
+shared.VapeDeveloper = false
+getgenv().catvapedev = false
+
+-- Ensure folders + commit seed for main.lua downloader
 ensure_folder("catrewrite")
 ensure_folder("catrewrite/profiles")
+ensure_folder("catrewrite/libraries")
 write_safe("catrewrite/profiles/commit.txt", "main")
 write_safe("catreset", "True")
 
--- OFFLINE whitelist (guest-only) injected in-memory (no file writes)
-local function apply_offline_whitelist()
-    local Players = game:GetService("Players")
-    local lp = Players.LocalPlayer
-    getgenv().catuser = getgenv().catuser or (lp and lp.Name) or "Guest"
-    shared.CatRank = "guest"
+-- Offline-safe whitelist stub: no network, no hard deps on shared.vape
+do
+    local stub = [[
+-- OFFLINE/SAFE whitelist: everyone is "guest"
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+getgenv().catuser = getgenv().catuser or (lp and lp.Name) or "Guest"
+shared.CatRank = "guest"
 
-    local W = {}
+local W = {
+    customtags = {},
+    ignores = {},
+    data = {
+        WhitelistedUsers = {},
+        BlacklistedUsers = {},
+        Announcement = {expiretime = 0, targets = "all", text = ""}
+    },
+    localprio = 0,
+    said = {}
+}
 
-    -- Core API used by scripts in this repo
-    function W.GetRank(_) return "guest" end
-    function W.IsWhitelisted(_) return false end
-    function W.GetUserData(uid) return { rank = "guest", name = tostring(uid) } end
+-- Minimal API surface used across the codebase
+function W:get(_) return 0, true, nil end -- level 0, attackable true, no tags
+function W:isingame() return false end
+function W:tag(_, text) return text and "" or {} end
+function W:update() return true end
+function W.GetRank(_) return "guest" end
+function W.IsWhitelisted(_) return false end
+function W.GetUserData(uid) return { rank = "guest", name = tostring(uid) } end
+W.commands = {}
 
-    -- Extra compatibility no-ops (harmless if unused)
-    function W.get(_) return 0, true, nil end
-    function W.isingame() return false end
-    function W.tag(_, text) return text and "" or {} end
-    function W.update() return true end
-    W.commands = {}
-
-    -- Publish globally
-    shared.CatWhitelist = W
-    _G.whitelist = W
-    whitelist = W
-
-    -- If Vape libs exist after main loads, wire them too
-    local vape = rawget(shared, "vape")
-    if vape and vape.Libraries then
-        vape.Libraries.whitelist = W
-    end
-
-    return W
+-- Publish globally; only touch vape if it exists
+shared.CatWhitelist = W
+_G.whitelist = W
+whitelist = W
+local ok, vape = pcall(function() return shared.vape end)
+if ok and vape and vape.Libraries then
+    vape.Libraries.whitelist = W
+    vape.Libraries.CatWhitelisted = false
 end
 
--- Apply once before main (in case anything checks it early)
-apply_offline_whitelist()
+return W
+]]
+    write_safe("catrewrite/libraries/whitelist.lua", stub)
+end
 
--- Fetch and run main.lua directly (stable path)
+-- Fetch and run main.lua directly from your repo
 local ok, src = pcall(function()
     return game:HttpGet("https://raw.githubusercontent.com/Plaayer1/CatV5/main/main.lua", true)
 end)
@@ -73,25 +81,4 @@ if not f then
     error("CatV5 init: loadstring error: "..tostring(err))
 end
 
--- Run main.lua
-local ret
-local ran, runErr = pcall(function()
-    ret = f(...)
-end)
-
--- Re-apply after main (in case main replaced it)
-apply_offline_whitelist()
-
--- Keep it enforced briefly to win any late init races
-task.spawn(function()
-    for _ = 1, 20 do -- ~10 seconds total
-        apply_offline_whitelist()
-        task.wait(0.5)
-    end
-end)
-
-if not ran then
-    error("CatV5 init: main.lua runtime error: "..tostring(runErr))
-end
-
-return ret
+return f(...)
