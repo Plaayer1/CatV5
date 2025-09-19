@@ -24,15 +24,13 @@ local isfile = isfile or function(file)
 	end)
 	return suc and res ~= nil and res ~= ''
 end
-local cloneref = cloneref or function(obj)
-	return obj
-end
+local cloneref = cloneref or function(obj) return obj end
 local playersService = cloneref(game:GetService('Players'))
 
 local function downloadFile(path, func)
 	if not isfile(path) or not shared.VapeDeveloper then
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/new-qwertyui/CatV5/'..readfile('catrewrite/profiles/commit.txt')..'/'..select(1, path:gsub('catrewrite/', '')), true)
+			return game:HttpGet('https://raw.githubusercontent.com/Plaayer1/CatV5/'..readfile('catrewrite/profiles/commit.txt')..'/'..select(1, path:gsub('catrewrite/', '')), true)
 		end)
 		if not suc or res == '404: Not Found' then
 			error(res)
@@ -60,7 +58,7 @@ local function finishLoading()
 		if (not teleportedServers) and (not shared.VapeIndependent) then
 			teleportedServers = true
 			local teleportScript = [[
-				loadstring(game:HttpGet('https://raw.githubusercontent.com/new-qwertyui/CatV5/main/init.lua'), 'init.lua')()
+				loadstring(game:HttpGet('https://raw.githubusercontent.com/Plaayer1/CatV5/main/init.lua'), 'init.lua')()
 			]]
 			if getgenv().catvapedev then
 				teleportScript = 'getgenv().catvapedev = true\n'.. teleportScript
@@ -90,10 +88,7 @@ if not isfile('catrewrite/profiles/gui.txt') then
 	writefile('catrewrite/profiles/gui.txt', 'new')
 end
 local gui = readfile('catrewrite/profiles/gui.txt')
-
-if gui == nil or gui == '' then
-	gui = 'new'
-end
+if gui == nil or gui == '' then gui = 'new' end
 
 if not isfolder('catrewrite/assets/'..gui) then
 	makefolder('catrewrite/assets/'..gui)
@@ -101,16 +96,17 @@ end
 vape = loadstring(downloadFile('catrewrite/guis/'..gui..'.lua'), 'gui')()
 shared.vape = vape
 
+-- Offline whitelist (no Discord/API): the module itself is fully local
 if not shared.VapeIndependent then
 	loadstring(downloadFile('catrewrite/games/universal.lua'), 'universal')()
 	shared.vape.Libraries.Cat = true
 	loadstring(downloadFile('catrewrite/libraries/whitelist.lua'), 'whitelist.lua')()
 	if isfile('catrewrite/games/'..game.PlaceId..'.lua') and shared.VapeDeveloper then
 		loadstring(downloadFile('catrewrite/games/'..game.PlaceId..'.lua'), tostring(game.PlaceId))(...)
-	else
+else
 		if not shared.VapeDeveloper then
 			local suc, res = pcall(function()
-				return game:HttpGet('https://raw.githubusercontent.com/new-qwertyui/CatV5/'..readfile('catrewrite/profiles/commit.txt')..'/games/'..game.PlaceId..'.lua', true)
+				return game:HttpGet('https://raw.githubusercontent.com/Plaayer1/CatV5/'..readfile('catrewrite/profiles/commit.txt')..'/games/'..game.PlaceId..'.lua', true)
 			end)
 			if suc and res ~= '404: Not Found' then
 				loadstring(downloadFile('catrewrite/games/'..game.PlaceId..'.lua'), tostring(game.PlaceId))(...)
