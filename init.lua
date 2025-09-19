@@ -181,6 +181,27 @@ if not shared.VapeDeveloper then
 	writefile('catrewrite/profiles/commit.txt', commit)
 end
 
+-- Ensure BedWars game scripts are present locally so main.lua loads them (dev mode prefers local)
+do
+	local function ensureGameFile(placeId)
+		local path = 'catrewrite/games/'..placeId..'.lua'
+		if not isfile(path) then
+			local ok, res = pcall(function()
+				return game:HttpGet(raw('games/'..placeId..'.lua'), true)
+			end)
+			if ok and res and res ~= '404: Not Found' then
+				if path:find('%.lua$') then
+					res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res
+				end
+				writefile(path, res)
+			end
+		end
+	end
+	-- BedWars: match and lobby place IDs
+	ensureGameFile('6872274481') -- BedWars match
+	ensureGameFile('6872265039') -- BedWars lobby
+end
+
 -- Load main
 loadstring(downloadFile('catrewrite/main.lua'), 'main')()
 
