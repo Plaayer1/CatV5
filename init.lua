@@ -181,7 +181,7 @@ if not shared.VapeDeveloper then
 	writefile('catrewrite/profiles/commit.txt', commit)
 end
 
--- Ensure BedWars game scripts are present locally so main.lua loads them (dev mode prefers local)
+-- Ensure the current game's script exists locally so main.lua will load it in developer mode.
 do
 	local function ensureGameFile(placeId)
 		local path = 'catrewrite/games/'..placeId..'.lua'
@@ -197,9 +197,31 @@ do
 			end
 		end
 	end
-	-- BedWars: match and lobby place IDs
-	ensureGameFile('6872274481') -- BedWars match
-	ensureGameFile('6872265039') -- BedWars lobby
+
+	-- Always fetch the active PlaceId
+	ensureGameFile(tostring(game.PlaceId))
+
+	-- Known BedWars place ids (lobby/variants) as fallbacks
+	for _, pid in {
+		'6872274481', -- BedWars match
+		'6872265039', -- BedWars lobby
+		'8444591321',
+		'8542275097',
+		'8560631822',
+		'11156779721',
+		'11630038968',
+		'12011959048',
+		'13246639586',
+		'14191889582',
+		'14662411059',
+		'17750024818',
+		'79695841807485',
+		'95004353881831'
+	} do
+		if tostring(game.PlaceId) ~= pid then
+			ensureGameFile(pid)
+		end
+	end
 end
 
 -- Load main
