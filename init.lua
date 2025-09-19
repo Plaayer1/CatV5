@@ -1,9 +1,12 @@
--- Simple CatV5 loader with offline-safe whitelist override
--- Keeps developer mode OFF; avoids network/whitelist crashes.
+-- CatV5 init with offline whitelist and safe BedWars loading
+-- Strategy:
+-- 1) Start in DEV mode so main.lua will NOT overwrite our local whitelist.lua
+-- 2) Drop a safe offline whitelist.lua that sets everyone to "guest" and then flips DEV mode OFF
+-- 3) Run main.lua (it will now fetch the game script remotely because DEV is OFF after whitelist loads)
 
 repeat task.wait() until game:IsLoaded()
 
--- Tiny helpers
+-- Helpers
 local function ensure_folder(path)
     pcall(function() if not isfolder(path) then makefolder(path) end end)
 end
@@ -11,18 +14,18 @@ local function write_safe(path, data)
     pcall(function() writefile(path, data) end)
 end
 
--- Non-dev path so main.lua auto-downloads the game script for the current PlaceId
-shared.VapeDeveloper = false
-getgenv().catvapedev = false
+-- 1) Begin with DEV ON so our local whitelist is honored by downloadFile
+shared.VapeDeveloper = true
+getgenv().catvapedev = true
 
--- Ensure folders + commit seed for main.lua downloader
+-- Seed folders/files main.lua expects
 ensure_folder("catrewrite")
 ensure_folder("catrewrite/profiles")
 ensure_folder("catrewrite/libraries")
 write_safe("catrewrite/profiles/commit.txt", "main")
 write_safe("catreset", "True")
 
--- Offline-safe whitelist stub: no network, no hard deps on shared.vape
+-- 2) Safe offline whitelist stub (no network, no hard deps)
 do
     local stub = [[
 -- OFFLINE/SAFE whitelist: everyone is "guest"
@@ -43,8 +46,8 @@ local W = {
     said = {}
 }
 
--- Minimal API surface used across the codebase
-function W:get(_) return 0, true, nil end -- level 0, attackable true, no tags
+-- Minimal API
+function W:get(_) return 0, true, nil end  -- level 0, attackable, no tags
 function W:isingame() return false end
 function W:tag(_, text) return text and "" or {} end
 function W:update() return true end
@@ -53,32 +56,38 @@ function W.IsWhitelisted(_) return false end
 function W.GetUserData(uid) return { rank = "guest", name = tostring(uid) } end
 W.commands = {}
 
--- Publish globally; only touch vape if it exists
+-- Publish globals safely
 shared.CatWhitelist = W
 _G.whitelist = W
 whitelist = W
-local ok, vape = pcall(function() return shared.vape end)
+
+-- Only touch vape if it exists
+local ok, vape = pcall(function() return rawget(shared, "vape") end)
 if ok and vape and vape.Libraries then
     vape.Libraries.whitelist = W
     vape.Libraries.CatWhitelisted = false
 end
+
+-- IMPORTANT: flip DEV OFF so main.lua will fetch the game script next
+shared.VapeDeveloper = false
+getgenv().catvapedev = false
 
 return W
 ]]
     write_safe("catrewrite/libraries/whitelist.lua", stub)
 end
 
--- Fetch and run main.lua directly from your repo
+-- 3) Fetch and run main.lua from your repo
 local ok, src = pcall(function()
     return game:HttpGet("https://raw.githubusercontent.com/Plaayer1/CatV5/main/main.lua", true)
 end)
 if not ok or not src or src == "" then
-    error("CatV5 init: Failed to fetch main.lua")
+    return warn("CatV5 init: Failed to fetch main.lua")
 end
 
 local f, err = loadstring(src, "main")
 if not f then
-    error("CatV5 init: loadstring error: "..tostring(err))
+    return warn("CatV5 init: loadstring error: " .. tostring(err))
 end
 
 return f(...)
